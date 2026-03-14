@@ -1,0 +1,77 @@
+;
+; BusFilter.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = USB ; TODO: specify appropriate Class
+ClassGuid   = {36FC9E60-C465-11CF-8056-444553540000} ; TODO: specify appropriate ClassGuid
+Provider    = %ManufacturerName%
+CatalogFile = BusFilter.cat
+DriverVer   = ; TODO: set DriverVer in stampinf property pages
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+BusFilter.sys = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%BusFilter.DeviceDesc% = BusFilter_Device, USB\ROOT_HUB30&VID8086&PID1E31 ; TODO: edit hw-id
+
+[BusFilter_Device.NT]
+Include = usbhub3.inf
+Needs   = Hub3.Install.NT
+CopyFiles = File_Copy
+
+[BusFilter_Device.NT.HW]
+; Include the standard HW directives for the hub
+Include = usbhub3.inf
+Needs   = Hub3.Install.NT.HW
+; Attach our driver as an Upper Filter
+AddReg  = BusFilter_AddReg_HW
+
+[File_Copy]
+BusFilter.sys
+
+[BusFilter_AddReg_HW]
+; 0x00010008 = FLG_ADDREG_TYPE_MULTI_SZ | FLG_ADDREG_APPEND
+HKR,,"UpperFilters",0x00010008,"BusFilter"
+
+;-------------- Service installation
+
+[BusFilter_Device.NT.Services]
+Include = usbhub3.inf
+Needs   = Hub3.Install.NT.Services
+AddService = BusFilter, , BusFilter_Service_Inst
+
+; -------------- BusFilter driver install sections
+[BusFilter_Service_Inst]
+DisplayName    = %BusFilter.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\BusFilter.sys
+
+[BusFilter_Device.NT.Wdf]
+KmdfService = BusFilter, BusFilter_wdfsect
+
+[BusFilter_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ManufacturerName = "Erik Bittner"
+DiskName = "BusFilter Installation Disk"
+BusFilter.DeviceDesc = "BusFilter Device"
+BusFilter.SVCDESC = "BusFilter Service"
