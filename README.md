@@ -13,6 +13,3 @@ This prototype is structurally designed to serve as the foundation for a more co
 - Modular Verdict System: The USERMODE_VERDICT structure and associated IOCTLs provide a standardized communication channel to enforce policies on any intercepted event.
 - Scalable Event Processing: The IOCP implementation in user-mode allows the application to scale efficiently, enabling the integration of complex detection logic (such as signature scanning or behavioral heuristics) across multiple devices concurrently.
 - Extensible Event Types: The BUSFILTER_EVENT_PACKET master structure uses a union memory layout to easily accommodate new interception types (e.g., USB select configuration events, PnP state changes) without altering the core driver-to-application communication pipeline.
-
-## Authors
-- Erik Bittner
