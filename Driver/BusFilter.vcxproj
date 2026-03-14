@@ -110,11 +110,11 @@
     <Inf Include="BusFilter.inf" />
   </ItemGroup>
   <ItemGroup>
-    <FilesToPackage Include="..\usermode\usermode.cpp" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <FilesToPackage Include="..\Usermode\usermode.cpp" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
       <PackageRelativeDirectory>
       </PackageRelativeDirectory>
     </FilesToPackage>
-    <FilesToPackage Include="..\usermode\usermode.cpp" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <FilesToPackage Include="..\Usermode\usermode.cpp" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
       <PackageRelativeDirectory>
       </PackageRelativeDirectory>
     </FilesToPackage>
