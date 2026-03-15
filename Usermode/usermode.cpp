@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <unordered_map>
 #include <string>
-#include "..\Driver\api.h"
+#include "api.h"
 
 #define DBG 1
 
@@ -22,9 +22,15 @@
 
 const DWORD BUFFER_SIZE = 8192; 
 
+enum CustomIoOperation {
+    IoOperationGetEvent = 1,
+    IoOperationVerdict = 2
+};
+
 // Structure to tie a buffer and an overlapped struct together
 struct IoContext {
     OVERLAPPED Overlapped;
+    CustomIoOperation OperationType;
     BYTE Buffer[BUFFER_SIZE];
 };
 
@@ -135,6 +141,7 @@ int main() {
     // Initialize the contexts
     for (int i = 0; i < QUEUE_DEPTH; i++) {
         ZeroMemory(&contexts[i].Overlapped, sizeof(OVERLAPPED));
+        contexts[i].OperationType = IoOperationGetEvent; 
         // hEvent is left as NULL; the IOCP handles notification automatically
     }
 
@@ -183,6 +190,13 @@ int main() {
         if (pOverlapped != NULL) {
             // Because OVERLAPPED is the first member of IoContext, we can safely cast the pointer back
             IoContext* ctx = (IoContext*)pOverlapped;
+
+            if (ctx->OperationType == IoOperationVerdict) {
+                // The kernel finished processing our verdict. 
+                // Clean up the heap allocation and wait for the next event.
+                delete ctx;
+                continue; 
+            }
 
             if (bSuccess && bytesTransferred >= FIELD_OFFSET(BUSFILTER_EVENT_PACKET, Data)) {
                 PBUSFILTER_EVENT_PACKET packet = (PBUSFILTER_EVENT_PACKET)ctx->Buffer; 
@@ -296,7 +310,14 @@ int main() {
                     #if DBG
                         std::cout << "--------------------------------------------------\n";
                     #endif
+
+                        // allocate verdict context on heap
+                        IoContext* verdictCtx = new IoContext();
+                        ZeroMemory(verdictCtx, sizeof(IoContext));
+                        verdictCtx->OperationType = IoOperationVerdict;
+
                         DWORD verdictBytesReturned = 0;
+
                         BOOL verdictSuccess = DeviceIoControl(
                             hDevice,
                             IOCTL_CUSTOM_RELEASE_URB,
@@ -305,11 +326,12 @@ int main() {
                             NULL,
                             0,
                             &verdictBytesReturned,
-                            NULL
+                            &verdictCtx->Overlapped
                         );
-
-                        if (!verdictSuccess) {
+                        
+                        if (!verdictSuccess && GetLastError() != ERROR_IO_PENDING) {
                             std::cerr << "Failed to release URB. Error: " << GetLastError() << std::endl;
+                            delete verdictCtx; 
                         }
 
                         if (verdict.Allow == FALSE) { 
@@ -317,6 +339,10 @@ int main() {
                             USERMODE_REMOVE_REQUEST req = { 0 };
                             req.DeviceId = packet->DeviceId;
                             
+                            IoContext* removeCtx = new IoContext();
+                            ZeroMemory(removeCtx, sizeof(IoContext));
+                            removeCtx->OperationType = IoOperationVerdict;
+
                             DWORD bytesReturned = 0;
                             BOOL success = DeviceIoControl(
                                 hDevice,
@@ -326,16 +352,20 @@ int main() {
                                 NULL,
                                 0,
                                 &bytesReturned,
-                                NULL
+                                &removeCtx->Overlapped
                             );
-                        #if DBG
-                            if (success) {
+
+                            if (!success && GetLastError() != ERROR_IO_PENDING) {
+                            #if DBG
+                                std::cerr << "[ERROR] Removal failed: " << GetLastError() << "\n";
+                            #endif
+                                delete removeCtx;
+                            } 
+                        #if DBG    
+                            else {
                                 std::cout << "\n[SUCCESS] Retroactive removal triggered for Device ID: 0x" 
                                         << std::hex << packet->DeviceId << "\n\n";
-                            } else {
-                                std::cerr << "\n[ERROR] Removal failed. Ensure the Device ID is valid. Error: " 
-                                        << GetLastError() << "\n\n";
-                            }
+                            } 
                         #endif
                         }
                     
@@ -392,6 +422,10 @@ int main() {
                     #endif
 
                         // Send the verdict back to the kernel
+                        IoContext* verdictCtx = new IoContext();
+                        ZeroMemory(verdictCtx, sizeof(IoContext));
+                        verdictCtx->OperationType = IoOperationVerdict;
+
                         DWORD verdictBytesReturned = 0;
                         BOOL verdictSuccess = DeviceIoControl(
                             hDevice,
@@ -401,11 +435,12 @@ int main() {
                             NULL,
                             0,
                             &verdictBytesReturned,
-                            NULL
+                            &verdictCtx->Overlapped
                         );
 
-                        if (!verdictSuccess) {
+                        if (!verdictSuccess && GetLastError() != ERROR_IO_PENDING) {
                             std::cerr << "Failed to send Start Verdict. Error: " << GetLastError() << std::endl;
+                            delete verdictCtx;
                         }
                         break;
                     }
