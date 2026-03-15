@@ -1,7 +1,5 @@
 #include "internal.h"
 
-#define BUSFILTER_DBG 1
-
 // ============================================================================
 // Driver Entry & Initialization
 // ============================================================================
@@ -17,9 +15,8 @@ DriverEntry(
 {
     // --- Create driver instance ---
 
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "DriverEntry\n"));
-#endif
+
     WDF_DRIVER_CONFIG config;
     NTSTATUS status;
     WDFDRIVER hdriver;
@@ -155,10 +152,7 @@ BusFilterDriverEvtDriverUnload(
     _In_ WDFDRIVER Driver
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "BusFilterDriverEvtDriverUnload: Unloading driver.\n"));
-#endif
-
 
     PDRIVER_CONTEXT driverCtx = GetDriverContext(Driver);
 
@@ -247,9 +241,8 @@ ControlDeviceEvtFileCleanup(
     _In_ WDFFILEOBJECT FileObject
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ControlDeviceEvtFileCleanup: User-mode handle closed. Draining pending URBs.\n"));
-#endif
+
     UNREFERENCED_PARAMETER(FileObject);
 
     PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
@@ -330,9 +323,9 @@ HubFilterEvtDeviceAdd(
     _Inout_ PWDFDEVICE_INIT DeviceInit
 )
 {
-#if BUSFILTER_DBG
+
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilterEvtDeviceAdd\n"));
-#endif
+
     UNREFERENCED_PARAMETER(Driver);
 
     // Mark this Device as a Filter Device
@@ -349,9 +342,7 @@ HubFilterEvtDeviceAdd(
     );
 
     if (!NT_SUCCESS(status)) {
-#if BUSFILTER_DBG
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "HubFilterEvtDeviceAdd: %x\n", status));
-#endif
         return status;
     }
 
@@ -365,9 +356,8 @@ HubFilter_WdmPnpPreprocess(
     _Inout_ PIRP Irp
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_WdmPnpPreprocess\n"));
-#endif
+
     PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
 
     if (irpStack->Parameters.QueryDeviceRelations.Type == BusRelations) {
@@ -449,9 +439,8 @@ HubFilter_BusRelationsCompletion(
     PVOID Context
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_BusRelationsCompletion\n"));
-#endif
+
     UNREFERENCED_PARAMETER(Context);
 
     if (NT_SUCCESS(Irp->IoStatus.Status) && Irp->IoStatus.Information != 0) { // A new (composite) device has connected
@@ -459,6 +448,28 @@ HubFilter_BusRelationsCompletion(
 
         for (ULONG i = 0; i < relations->Count; i++) { // iterate over possible child devices
             PDEVICE_OBJECT childPdo = relations->Objects[i];
+
+            // prevent duplicates
+            PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
+            BOOLEAN alreadyAttached = FALSE;
+
+            WdfSpinLockAcquire(driverCtx->FilterDeviceLock);
+            PLIST_ENTRY currentEntry = driverCtx->FilterDeviceListHead.Flink;
+
+            while (currentEntry != &driverCtx->FilterDeviceListHead) {
+                PCHILD_FILTER_EXTENSION existingExt = CONTAINING_RECORD(currentEntry, CHILD_FILTER_EXTENSION, GlobalListEntry);
+                if (existingExt->Pdo == childPdo) {
+                    alreadyAttached = TRUE;
+                    break;
+                }
+                currentEntry = currentEntry->Flink;
+            }
+            WdfSpinLockRelease(driverCtx->FilterDeviceLock);
+
+            if (alreadyAttached) {
+                continue; // Skip this PDO, our filter is already attached
+            }
+
             PDEVICE_OBJECT childFilterDevice;
 
             // Create raw WDM child filter
@@ -473,9 +484,8 @@ HubFilter_BusRelationsCompletion(
             );
 
             if (NT_SUCCESS(status)) {
-#if BUSFILTER_DBG
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_BusRelationsCompletion: Created raw WDM child filter\n"));
-#endif
+
                 PCHILD_FILTER_EXTENSION ext = (PCHILD_FILTER_EXTENSION)childFilterDevice->DeviceExtension;
 
                 // --- initialize filter extention fields
@@ -506,9 +516,7 @@ HubFilter_BusRelationsCompletion(
                         ext->PortNumber = portNumber;
                     }
                     else {
-#if BUSFILTER_DBG
                         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "HubFilter_BusRelationsCompletion: Get Port Nr. Error %x\n", propStatus));
-#endif
                         ext->PortNumber = 0; // 0 indicates the query failed or is not applicable
                     }
 
@@ -519,9 +527,7 @@ HubFilter_BusRelationsCompletion(
                         ext->HardwareIDs = hardwareIDs;
                     }
                     else {
-#if BUSFILTER_DBG
                         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_BusRelationsCompletion: Get Child Hardware ID failed: %ws\n", ext->HardwareIDs));
-#endif
                         ext->HardwareIDs = NULL;
                         ext->HardwareIDsLength = 0; 
                     }
@@ -532,9 +538,7 @@ HubFilter_BusRelationsCompletion(
                         ext->CompatibleIDs = compatibleIDs;
                     }
                     else {
-#if BUSFILTER_DBG
                         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_BusRelationsCompletion: Get Child Compatible ID failed: %ws\n", ext->HardwareIDs));
-#endif
                         ext->CompatibleIDs = NULL;
                         ext->CompatibleIDsLength = 0;
                     }
@@ -546,9 +550,7 @@ HubFilter_BusRelationsCompletion(
                         ext->ContainerId = containerId; // Save to extension
                     }
                     else {
-#if BUSFILTER_DBG
                         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "HubFilter_BusRelationsCompletion: Get Child Container ID failed: %ws\n", ext->HardwareIDs));
-#endif
                         ext->ContainerId = NULL;
                         ext->ContainerIdLength = 0;
                     }
@@ -558,7 +560,6 @@ HubFilter_BusRelationsCompletion(
                     childFilterDevice->Flags |= (lowerDevice->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE));
 
                     // Add the newly created device to the global tracking list
-                    PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
                     WdfSpinLockAcquire(driverCtx->FilterDeviceLock);
                     InsertTailList(&driverCtx->FilterDeviceListHead, &ext->GlobalListEntry);
                     WdfSpinLockRelease(driverCtx->FilterDeviceLock);
@@ -611,9 +612,7 @@ ChildFilter_DispatchPnp(
     PIRP Irp
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_DispatchPnp: Entry\n"));
-#endif
     PCHILD_FILTER_EXTENSION ext = (PCHILD_FILTER_EXTENSION)DeviceObject->DeviceExtension;
 
     if (ext == NULL || ext->MagicNumber != WDM_FILTER_MAGIC || ext->IsWdmFilter != TRUE) {
@@ -626,6 +625,14 @@ ChildFilter_DispatchPnp(
 
 
     if (irpSp->MinorFunction != IRP_MN_START_DEVICE) {
+
+#if DBG
+        PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+        if (stack->MinorFunction == IRP_MN_START_DEVICE) {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] Intercepted START_DEVICE. IRP: %p\n", Irp));
+        }
+#endif
+
         // --- in any other case, send notification to user ioctl without expecting response
         size_t packetSize = FIELD_OFFSET(BUSFILTER_EVENT_PACKET, Data) + sizeof(FILTER_PNP_EVENT_DATA);
         PBUSFILTER_EVENT_PACKET packet = (PBUSFILTER_EVENT_PACKET)ExAllocatePool2(POOL_FLAG_NON_PAGED, packetSize, 'tkPE');
@@ -686,11 +693,8 @@ ChildFilter_DispatchPnp(
 
     case IRP_MN_REMOVE_DEVICE: 
     {
-#if BUSFILTER_DBG
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_DispatchPnp: USB Device Unplugged. Detaching child filter: %p\n", DeviceObject));
-#endif
         // --- Handle cleaning up the device extention if parent device disconnected ---
-        
         // Free Dynamically Allocated Strings
         if (ext->HardwareIDs != NULL) {
             ExFreePoolWithTag(ext->HardwareIDs, 'pPrD');
@@ -753,9 +757,8 @@ ChildFilter_DispatchPnp(
     }
     case IRP_MN_START_DEVICE: 
     {
-#if BUSFILTER_DBG
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_DispatchPnp: Intercepted IRP_MN_START_DEVICE\n"));
-#endif
+
         PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
 
         // Free old pointers first and repopulate in case of a PnP rebalance
@@ -783,9 +786,7 @@ ChildFilter_DispatchPnp(
                 ext->PortNumber = portNumber;
             }
             else {
-#if BUSFILTER_DBG
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "ChildFilter_DispatchPnp: Get Port Nr. Error %x\n", propStatus));
-#endif
                 ext->PortNumber = 0; // 0 indicates the query failed or is not applicable
             }
         }
@@ -880,7 +881,8 @@ ChildFilter_DispatchPnp(
                 // Since we marked it pending, we must pass it down asynchronously or complete it.
                 // We will pass it down and allow normal execution
                 IoSkipCurrentIrpStackLocation(Irp);
-                return IoCallDriver(ext->LowerDevice, Irp);
+                IoCallDriver(ext->LowerDevice, Irp);
+                return STATUS_PENDING;
             }
             KeReleaseSpinLock(&ext->EventListLock, oldIrql);
         }
@@ -903,9 +905,14 @@ ChildFilter_DispatchInternalDeviceControl(
     PIRP Irp
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_DispatchInternalDeviceControl: Entry\n"));
+
+#if DBG
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] InternalDevCtrl IOCTL: 0x%X on IRP: %p\n",
+        stack->Parameters.DeviceIoControl.IoControlCode, Irp));
 #endif
+
     PCHILD_FILTER_EXTENSION ext = (PCHILD_FILTER_EXTENSION)DeviceObject->DeviceExtension;
 
     // If this is the KMDF Hub device, route it back to the saved WDF dispatch routine
@@ -924,22 +931,28 @@ ChildFilter_DispatchInternalDeviceControl(
     PIO_STACK_LOCATION irpSp = IoGetCurrentIrpStackLocation(Irp);
     ULONG ioControlCode = irpSp->Parameters.DeviceIoControl.IoControlCode;
 
+#if DBG
     // View when device issues a reset command
     if (ioControlCode == IOCTL_INTERNAL_USB_RESET_PORT) {
         // debug only
-#if BUSFILTER_DBG
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_DispatchInternalDeviceControl: USB Port Reset command intercepted on child PDO: %p\n", ext->Pdo));
-#endif
     }
+#endif
 
     // Intercept URBs and define custom URB completion routine
-    else if (ioControlCode == IOCTL_INTERNAL_USB_SUBMIT_URB) {
+    if (ioControlCode == IOCTL_INTERNAL_USB_SUBMIT_URB) {
         PURB urb = (PURB)irpSp->Parameters.Others.Argument1;
 
         if (urb != NULL) {
             IoCopyCurrentIrpStackLocationToNext(Irp);
             IoSetCompletionRoutine(Irp, ChildFilter_UrbCompletionRoutine, urb, TRUE, TRUE, TRUE);
-            return IoCallDriver(ext->LowerDevice, Irp);
+
+            // Tell the I/O Manager and upper drivers that this IRP will be completed asynchronously
+            IoMarkIrpPending(Irp);
+
+            IoCallDriver(ext->LowerDevice, Irp);
+
+            return STATUS_PENDING;
         }
     }
 
@@ -1167,10 +1180,10 @@ ChildFilter_UrbCompletionRoutine(
         IoMarkIrpPending(Irp);
     }
 
-#if BUSFILTER_DBG
-    if(urb != NULL)
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "ChildFilter_UrbCompletionRoutine: Current URB Function %04X\n", urb->UrbHeader.Function));
+#if DBG
+    if (urb != NULL) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ChildFilter_UrbCompletionRoutine: Current URB Function %04X\n", urb->UrbHeader.Function));
+    }
 #endif
 
     if (NT_SUCCESS(Irp->IoStatus.Status) && urb != NULL) {
@@ -1193,6 +1206,7 @@ ChildFilter_UrbCompletionRoutine(
                 }
             }
             // Return early so we don't send useless events to user-mode
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] URB Completion Routine, device is banned: %p\n", Irp));
             return STATUS_SUCCESS;
         }
         
@@ -1240,8 +1254,11 @@ ChildFilter_UrbCompletionRoutine(
 
                     // Pre-allocate the tracking structure before sending to user mode to prevent race condition
                     PPENDING_IRP_EVENT irpEvent = (PPENDING_IRP_EVENT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PENDING_IRP_EVENT), 'kEvt');
+                    PURB_NOTIFY_CONTEXT notifyCtx = (PURB_NOTIFY_CONTEXT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(URB_NOTIFY_CONTEXT), 'wCtx');
 
-                    if (irpEvent == NULL) {
+                    if (irpEvent == NULL || notifyCtx == NULL) {
+                        if (irpEvent) ExFreePoolWithTag(irpEvent, 'kEvt');
+                        if (notifyCtx) ExFreePoolWithTag(notifyCtx, 'wCtx');
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS; // Fail-safe: let the IRP through if out of memory
                     }
@@ -1251,15 +1268,29 @@ ChildFilter_UrbCompletionRoutine(
                     irpEvent->rawBuffer = safeBuffer;
                     irpEvent->urbDataLength = dataLength;
 
-                    // Lock and queue the IRP securely BEFORE notifying user mode
+                    // Setup Work Item Context
+                    notifyCtx->WorkItem = IoAllocateWorkItem(DeviceObject);
+                    if (notifyCtx->WorkItem == NULL) {
+                        ExFreePoolWithTag(irpEvent, 'kEvt');
+                        ExFreePoolWithTag(notifyCtx, 'wCtx');
+                        ExFreePoolWithTag(packet, 'tkPE');
+                        return STATUS_SUCCESS;
+                    }
+
+                    notifyCtx->Ext = ext;
+                    notifyCtx->Packet = packet;
+                    notifyCtx->PacketSize = packetSize;
+                    notifyCtx->EventId = eventId;
+
                     KIRQL oldIrql;
                     KeAcquireSpinLock(&ext->EventListLock, &oldIrql);
 
                     // If the user mode app is disconnected then return early and let request through
                     PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
                     if (driverCtx->IsAppConnected == FALSE) {
-                        // App disconnected, abort queuing
                         KeReleaseSpinLock(&ext->EventListLock, oldIrql);
+                        IoFreeWorkItem(notifyCtx->WorkItem);
+                        ExFreePoolWithTag(notifyCtx, 'wCtx');
                         ExFreePoolWithTag(irpEvent, 'kEvt');
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS;
@@ -1269,42 +1300,23 @@ ChildFilter_UrbCompletionRoutine(
                     // or if the framework otherwise determines the IRP needs to be canceled
                     IoSetCancelRoutine(Irp, ChildFilter_CancelHeldIrp);
 
-                    if(Irp->Cancel && IoSetCancelRoutine(Irp, NULL) != NULL) {
-                        // IRP was already cancelled, abort queuing
+                    if (Irp->Cancel && IoSetCancelRoutine(Irp, NULL) != NULL) {
                         KeReleaseSpinLock(&ext->EventListLock, oldIrql);
+                        IoFreeWorkItem(notifyCtx->WorkItem);
+                        ExFreePoolWithTag(notifyCtx, 'wCtx');
                         ExFreePoolWithTag(irpEvent, 'kEvt');
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS;
                     }
 
-                    // Safely insert into pending event list
                     InsertTailList(&ext->PendingEventListHead, &irpEvent->ListEntry);
                     KeReleaseSpinLock(&ext->EventListLock, oldIrql);
 
-                    // notify user mode
-                    NTSTATUS userModeNotified = InvertedEventNotify(packet, packetSize);
-                    ExFreePoolWithTag(packet, 'tkPE');
+                    // Defer notification to user mode via the Work Item
+                    IoQueueWorkItem(notifyCtx->WorkItem, DeferredUrbNotifyCallback, DelayedWorkQueue, notifyCtx);
+                    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] URB Completion Routine with more processing required. Queued IRP: %p\n", Irp));
 
-                    if (NT_SUCCESS(userModeNotified)) {
-                        // If the notification was succuessful, then we can safely halt the IRP
-                        return STATUS_MORE_PROCESSING_REQUIRED;
-                    }
-                    else {
-                        // Notification failed (e.g., IOCTL queue empty) -> undo the queuing
-                        KeAcquireSpinLock(&ext->EventListLock, &oldIrql);
-
-                        if (IoSetCancelRoutine(Irp, NULL) != NULL) {
-                            RemoveEntryList(&irpEvent->ListEntry);
-                            KeReleaseSpinLock(&ext->EventListLock, oldIrql);
-                            ExFreePoolWithTag(irpEvent, 'kEvt');
-                            return STATUS_SUCCESS; // Let OS complete it
-                        }
-                        else {
-                            // Cancel routine is already running and has ownership, let it handle completion
-                            KeReleaseSpinLock(&ext->EventListLock, oldIrql);
-                            return STATUS_MORE_PROCESSING_REQUIRED;
-                        }
-                    }
+                    return STATUS_MORE_PROCESSING_REQUIRED;
                 }
             }
         }
@@ -1386,8 +1398,69 @@ ChildFilter_UrbCompletionRoutine(
         }
 
     }
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] URB Completion Routine at the bottom, Queued IRP: %p\n", Irp));
 
     return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+VOID DeferredUrbNotifyCallback(
+    PDEVICE_OBJECT DeviceObject,
+    PVOID Context
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    PURB_NOTIFY_CONTEXT ctx = (PURB_NOTIFY_CONTEXT)Context;
+
+    if (ctx == NULL) return;
+
+    // Notify user mode safely outside the completion routine
+    NTSTATUS status = InvertedEventNotify(ctx->Packet, ctx->PacketSize);
+    ExFreePoolWithTag(ctx->Packet, 'tkPE');
+
+    if (!NT_SUCCESS(status)) {
+        // Notification failed. Safely look up the event by ID under the lock.
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&ctx->Ext->EventListLock, &oldIrql);
+
+        PLIST_ENTRY currentEntry = ctx->Ext->PendingEventListHead.Flink;
+        PPENDING_IRP_EVENT targetEvent = NULL;
+
+        while (currentEntry != &ctx->Ext->PendingEventListHead) {
+            PPENDING_IRP_EVENT ev = CONTAINING_RECORD(currentEntry, PENDING_IRP_EVENT, ListEntry);
+            if (ev->EventId == ctx->EventId) {
+                targetEvent = ev;
+                break;
+            }
+            currentEntry = currentEntry->Flink;
+        }
+
+        // Only proceed if the cancel routine hasn't already removed it
+        if (targetEvent != NULL) {
+            if (IoSetCancelRoutine(targetEvent->Irp, NULL) != NULL) {
+                // We own the IRP. Remove it, free it, and complete it.
+                RemoveEntryList(&targetEvent->ListEntry);
+                PIRP irpToComplete = targetEvent->Irp;
+
+                ExFreePoolWithTag(targetEvent, 'kEvt');
+                KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
+
+                irpToComplete->IoStatus.Status = STATUS_UNSUCCESSFUL;
+                IoCompleteRequest(irpToComplete, IO_NO_INCREMENT);
+            }
+            else {
+                // The cancel routine is currently running and owns the IRP.
+                KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
+            }
+        }
+        else {
+            // The event was not found. The cancel routine already processed and freed it.
+            KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
+        }
+    }
+
+    IoFreeWorkItem(ctx->WorkItem);
+    ExFreePoolWithTag(ctx, 'wCtx');
 }
 
 // ============================================================================
@@ -1432,7 +1505,7 @@ InvertedEventNotify(
             WdfRequestComplete(pendingRequest, status);
         }
     }
-#if BUSFILTER_DBG
+#if DBG
     else if (status == STATUS_NO_MORE_ENTRIES) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Event dropped: No pending IOCTLs in queue.\n"));
     }
@@ -1448,9 +1521,7 @@ InvertedIoDeviceControl(WDFQUEUE Queue,
     ULONG IoControlCode
 )
 {
-#if BUSFILTER_DBG
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "InvertedIoDeviceControl: Entry\n"));
-#endif
 
     PCONTROL_DEVICE_CONTEXT controlCtx;
     NTSTATUS status;
@@ -1483,6 +1554,8 @@ InvertedIoDeviceControl(WDFQUEUE Queue,
 
     case IOCTL_CUSTOM_DEVICE_START_VERDICT:
     {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] Got verdict request for start device\n"));
+
         size_t verdictLength = sizeof(USERMODE_VERDICT);
 
         if (InputBufferLength != verdictLength) {
@@ -1493,6 +1566,7 @@ InvertedIoDeviceControl(WDFQUEUE Queue,
         PVOID inputBuffer;
         status = WdfRequestRetrieveInputBuffer(Request, verdictLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] start verdict: couldnt get buffer\n"));
             WdfRequestComplete(Request, status);
             return;
         }
@@ -1545,6 +1619,7 @@ InvertedIoDeviceControl(WDFQUEUE Queue,
         // Resume the IRP at PASSIVE_LEVEL based on the user-mode verdict
         if (irpToComplete != NULL && targetExt != NULL) {
             if (verdictStruct->Allow) {
+                KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] User verdict allow for start device, calling IoCallDriver: %p\n", irpToComplete));
                 // Allow: Pass the start request down to the USB hub driver
                 IoSkipCurrentIrpStackLocation(irpToComplete);
                 IoCallDriver(targetExt->LowerDevice, irpToComplete);
@@ -1553,8 +1628,12 @@ InvertedIoDeviceControl(WDFQUEUE Queue,
                 // Deny: Fail the IRP immediately. The OS will abort device start.
                 irpToComplete->IoStatus.Status = STATUS_ACCESS_DENIED;
                 irpToComplete->IoStatus.Information = 0;
+                KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] User verdict received. Calling IoCompleteRequest on IRP: %p\n", irpToComplete));
                 IoCompleteRequest(irpToComplete, IO_NO_INCREMENT);
             }
+        }
+        else {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] start verdict: couldnt find IRP\n"));
         }
 
         WdfRequestComplete(Request, returnStatus);

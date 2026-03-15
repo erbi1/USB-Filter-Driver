@@ -156,6 +156,22 @@ EVT_WDFDEVICE_WDM_IRP_PREPROCESS HubFilter_WdmPnpPreprocess;
 // ----------------------------------------------------------------------------
 // Control Device Callbacks (User-Mode Interaction)
 // ----------------------------------------------------------------------------
+
+// Declare the worker routine
+extern "C" {
+    IO_WORKITEM_ROUTINE DeferredUrbNotifyCallback;
+}
+
+// Used to provide the DeferredUrbNotifyCallback with the necessary context to 
+// notify the user mode application asynchronously 
+typedef struct _URB_NOTIFY_CONTEXT {
+    PIO_WORKITEM WorkItem;
+    PCHILD_FILTER_EXTENSION Ext;
+    PBUSFILTER_EVENT_PACKET Packet;
+    size_t PacketSize;
+    UINT64 EventId;
+} URB_NOTIFY_CONTEXT, * PURB_NOTIFY_CONTEXT;
+
 EVT_WDF_DEVICE_FILE_CREATE ControlDeviceEvtFileCreate;
 EVT_WDF_FILE_CLEANUP ControlDeviceEvtFileCleanup;
 
