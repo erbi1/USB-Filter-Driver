@@ -1,6 +1,9 @@
 # USB Filter Detection Framework Prototype
 This project is a prototype for a Windows USB detection and prevention framework. It consists of a kernel-mode filter driver (KMDF/WDM hybrid) and a user-mode application. The system intercepts USB device enumeration and data traffic in real-time, allowing the user-mode application to inspect payloads and issue Allow or Block verdicts before the operating system processes them.
 
+⚠️ Stability & Security Warning
+Use strictly in an isolated testing environment. This prototype installs a custom kernel-mode filter driver (BusFilter.sys). Because drivers operate at the highest privilege level, any bugs, memory leaks, or unhandled exceptions will immediately cause a fatal system crash (BSOD). Additionally, as it directly parses raw USB Request Blocks (URBs), the codebase has not been audited and may contain unknown vulnerabilities like buffer overflows. Do not deploy this on production machines.
+
 ## Key Features
 - Real-Time Device Enumeration Control: Intercepts IRP_MN_START_DEVICE requests natively. It extracts Hardware IDs, Compatible IDs, and Container IDs, sending them to user-mode to determine if a device is permitted to start.
 - USB Request Block (URB) Interception: Captures data transfers (such as Bulk and Interrupt transfers) between the USB hardware and the OS. The driver holds the I/O Request Packet (IRP) in a pending state while the user-mode application inspects the payload.
