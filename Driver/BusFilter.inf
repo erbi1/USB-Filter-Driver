@@ -4,11 +4,11 @@
 
 [Version]
 Signature   = "$WINDOWS NT$"
-Class       = USB ; TODO: specify appropriate Class
-ClassGuid   = {36FC9E60-C465-11CF-8056-444553540000} ; TODO: specify appropriate ClassGuid
+Class       = USB
+ClassGuid   = {36FC9E60-C465-11CF-8056-444553540000}
 Provider    = %ManufacturerName%
 CatalogFile = BusFilter.cat
-DriverVer   = ; TODO: set DriverVer in stampinf property pages
+DriverVer   = ;
 PnpLockdown = 1
 
 [DestinationDirs]
@@ -28,7 +28,7 @@ BusFilter.sys = 1,,
 %ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
 
 [Standard.NT$ARCH$.10.0...16299]
-%BusFilter.DeviceDesc% = BusFilter_Device, USB\ROOT_HUB30&VID8086&PID1E31 ; TODO: edit hw-id
+%BusFilter.DeviceDesc% = BusFilter_Device, USB\ROOT_HUB30&VID8086&PID1E31 ; HW-ID of the root hub on the testing machine
 
 [BusFilter_Device.NT]
 Include = usbhub3.inf

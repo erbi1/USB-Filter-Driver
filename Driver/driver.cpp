@@ -1254,11 +1254,8 @@ ChildFilter_UrbCompletionRoutine(
 
                     // Pre-allocate the tracking structure before sending to user mode to prevent race condition
                     PPENDING_IRP_EVENT irpEvent = (PPENDING_IRP_EVENT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PENDING_IRP_EVENT), 'kEvt');
-                    PURB_NOTIFY_CONTEXT notifyCtx = (PURB_NOTIFY_CONTEXT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(URB_NOTIFY_CONTEXT), 'wCtx');
 
-                    if (irpEvent == NULL || notifyCtx == NULL) {
-                        if (irpEvent) ExFreePoolWithTag(irpEvent, 'kEvt');
-                        if (notifyCtx) ExFreePoolWithTag(notifyCtx, 'wCtx');
+                    if (irpEvent == NULL) {
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS; // Fail-safe: let the IRP through if out of memory
                     }
@@ -1268,29 +1265,15 @@ ChildFilter_UrbCompletionRoutine(
                     irpEvent->rawBuffer = safeBuffer;
                     irpEvent->urbDataLength = dataLength;
 
-                    // Setup Work Item Context
-                    notifyCtx->WorkItem = IoAllocateWorkItem(DeviceObject);
-                    if (notifyCtx->WorkItem == NULL) {
-                        ExFreePoolWithTag(irpEvent, 'kEvt');
-                        ExFreePoolWithTag(notifyCtx, 'wCtx');
-                        ExFreePoolWithTag(packet, 'tkPE');
-                        return STATUS_SUCCESS;
-                    }
-
-                    notifyCtx->Ext = ext;
-                    notifyCtx->Packet = packet;
-                    notifyCtx->PacketSize = packetSize;
-                    notifyCtx->EventId = eventId;
-
+                    // Lock and queue the IRP securely BEFORE notifying user mode
                     KIRQL oldIrql;
                     KeAcquireSpinLock(&ext->EventListLock, &oldIrql);
 
                     // If the user mode app is disconnected then return early and let request through
                     PDRIVER_CONTEXT driverCtx = GetDriverContext(WdfGetDriver());
                     if (driverCtx->IsAppConnected == FALSE) {
+                        // App disconnected, abort queuing
                         KeReleaseSpinLock(&ext->EventListLock, oldIrql);
-                        IoFreeWorkItem(notifyCtx->WorkItem);
-                        ExFreePoolWithTag(notifyCtx, 'wCtx');
                         ExFreePoolWithTag(irpEvent, 'kEvt');
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS;
@@ -1301,22 +1284,41 @@ ChildFilter_UrbCompletionRoutine(
                     IoSetCancelRoutine(Irp, ChildFilter_CancelHeldIrp);
 
                     if (Irp->Cancel && IoSetCancelRoutine(Irp, NULL) != NULL) {
+                        // IRP was already cancelled, abort queuing
                         KeReleaseSpinLock(&ext->EventListLock, oldIrql);
-                        IoFreeWorkItem(notifyCtx->WorkItem);
-                        ExFreePoolWithTag(notifyCtx, 'wCtx');
                         ExFreePoolWithTag(irpEvent, 'kEvt');
                         ExFreePoolWithTag(packet, 'tkPE');
                         return STATUS_SUCCESS;
                     }
 
+                    // Safely insert into pending event list
                     InsertTailList(&ext->PendingEventListHead, &irpEvent->ListEntry);
                     KeReleaseSpinLock(&ext->EventListLock, oldIrql);
 
-                    // Defer notification to user mode via the Work Item
-                    IoQueueWorkItem(notifyCtx->WorkItem, DeferredUrbNotifyCallback, DelayedWorkQueue, notifyCtx);
-                    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] URB Completion Routine with more processing required. Queued IRP: %p\n", Irp));
+                    // notify user mode
+                    NTSTATUS userModeNotified = InvertedEventNotify(packet, packetSize);
+                    ExFreePoolWithTag(packet, 'tkPE');
 
-                    return STATUS_MORE_PROCESSING_REQUIRED;
+                    if (NT_SUCCESS(userModeNotified)) {
+                        // If the notification was succuessful, then we can safely halt the IRP
+                        return STATUS_MORE_PROCESSING_REQUIRED;
+                    }
+                    else {
+                        // Notification failed (e.g., IOCTL queue empty) -> undo the queuing
+                        KeAcquireSpinLock(&ext->EventListLock, &oldIrql);
+
+                        if (IoSetCancelRoutine(Irp, NULL) != NULL) {
+                            RemoveEntryList(&irpEvent->ListEntry);
+                            KeReleaseSpinLock(&ext->EventListLock, oldIrql);
+                            ExFreePoolWithTag(irpEvent, 'kEvt');
+                            return STATUS_SUCCESS; // Let OS complete it
+                        }
+                        else {
+                            // Cancel routine is already running and has ownership, let it handle completion
+                            KeReleaseSpinLock(&ext->EventListLock, oldIrql);
+                            return STATUS_MORE_PROCESSING_REQUIRED;
+                        }
+                    }
                 }
             }
         }
@@ -1401,66 +1403,6 @@ ChildFilter_UrbCompletionRoutine(
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "[Debug] URB Completion Routine at the bottom, Queued IRP: %p\n", Irp));
 
     return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-VOID DeferredUrbNotifyCallback(
-    PDEVICE_OBJECT DeviceObject,
-    PVOID Context
-)
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-    PURB_NOTIFY_CONTEXT ctx = (PURB_NOTIFY_CONTEXT)Context;
-
-    if (ctx == NULL) return;
-
-    // Notify user mode safely outside the completion routine
-    NTSTATUS status = InvertedEventNotify(ctx->Packet, ctx->PacketSize);
-    ExFreePoolWithTag(ctx->Packet, 'tkPE');
-
-    if (!NT_SUCCESS(status)) {
-        // Notification failed. Safely look up the event by ID under the lock.
-        KIRQL oldIrql;
-        KeAcquireSpinLock(&ctx->Ext->EventListLock, &oldIrql);
-
-        PLIST_ENTRY currentEntry = ctx->Ext->PendingEventListHead.Flink;
-        PPENDING_IRP_EVENT targetEvent = NULL;
-
-        while (currentEntry != &ctx->Ext->PendingEventListHead) {
-            PPENDING_IRP_EVENT ev = CONTAINING_RECORD(currentEntry, PENDING_IRP_EVENT, ListEntry);
-            if (ev->EventId == ctx->EventId) {
-                targetEvent = ev;
-                break;
-            }
-            currentEntry = currentEntry->Flink;
-        }
-
-        // Only proceed if the cancel routine hasn't already removed it
-        if (targetEvent != NULL) {
-            if (IoSetCancelRoutine(targetEvent->Irp, NULL) != NULL) {
-                // We own the IRP. Remove it, free it, and complete it.
-                RemoveEntryList(&targetEvent->ListEntry);
-                PIRP irpToComplete = targetEvent->Irp;
-
-                ExFreePoolWithTag(targetEvent, 'kEvt');
-                KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
-
-                irpToComplete->IoStatus.Status = STATUS_UNSUCCESSFUL;
-                IoCompleteRequest(irpToComplete, IO_NO_INCREMENT);
-            }
-            else {
-                // The cancel routine is currently running and owns the IRP.
-                KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
-            }
-        }
-        else {
-            // The event was not found. The cancel routine already processed and freed it.
-            KeReleaseSpinLock(&ctx->Ext->EventListLock, oldIrql);
-        }
-    }
-
-    IoFreeWorkItem(ctx->WorkItem);
-    ExFreePoolWithTag(ctx, 'wCtx');
 }
 
 // ============================================================================
