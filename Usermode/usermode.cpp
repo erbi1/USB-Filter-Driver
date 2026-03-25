@@ -8,20 +8,10 @@
 
 #define DBG 1
 
-// ============================================================================
-// Driver Definitions (Ported from include.h)
-// ============================================================================
-
-#define FILE_DEVICE_INVERTED 0xCF54
-
-#define IOCTL_CUSTOM_GET_EVENT \
-    CTL_CODE(FILE_DEVICE_INVERTED, 2049, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CUSTOM_RELEASE_URB \
-    CTL_CODE(FILE_DEVICE_INVERTED, 2050, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
+// Buffer Size for the GET event
 const DWORD BUFFER_SIZE = 8192; 
 
+// for determining the correct context
 enum CustomIoOperation {
     IoOperationGetEvent = 1,
     IoOperationVerdict = 2
